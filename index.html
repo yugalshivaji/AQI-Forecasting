@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delhi NCR Pollution Control Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Roboto, sans-serif; }
+        .dashboard-header { background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 1.5rem; }
+        .chart-container { position: relative; height: 350px; width: 100%; }
+        .loading-overlay { display: none; text-align: center; padding: 2rem; color: #666; }
+        #ai-panel { background-color: #ffffff; border-left: 5px solid #0d6efd; }
+    </style>
+</head>
+<body>
+
+<div class="dashboard-header text-center">
+    <div class="container">
+        <h1 class="fw-bold">Delhi-NCR AQI Analytics & Policy Hub</h1>
+        <p class="lead">Real-time Data, Forecasting & AI Policy Analysis</p>
+    </div>
+</div>
+
+<div class="container mb-5">
+    
+    <div class="card p-4">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-5">
+                <label class="form-label fw-bold">Select Monitoring Station</label>
+                <select id="stationSelect" class="form-select form-select-lg">
+                    <option value="" disabled selected>Loading stations...</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label fw-bold">Historical Range</label>
+                <select id="rangeSelect" class="form-select form-select-lg">
+                    <option value="10">Last 10 Days</option>
+                    <option value="30" selected>Last 30 Days</option>
+                    <option value="100">Last 100 Days</option>
+                    <option value="365">Last 1 Year</option>
+                    <option value="1460">Last 4 Years (Slow)</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button onclick="updateDashboard()" class="btn btn-primary btn-lg w-100">Analyze Data</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card p-3">
+                <h5 class="card-title text-secondary">Historical Min/Max AQI Frequency</h5>
+                <div class="chart-container">
+                    <canvas id="historicalChart"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card p-4 h-100" id="ai-panel">
+                <h4 class="mb-3">🤖 AI Policy & Analysis</h4>
+                <div id="ai-loading" class="loading-overlay">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <p class="mt-2">Consulting Policy Database...</p>
+                </div>
+                <div id="ai-content">
+                    <p class="text-muted">Select a station and click "Analyze Data".</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-3">
+        <div class="col-12">
+            <div class="card p-3">
+                <h5 class="card-title text-secondary">AQI Forecast (Next 100 Hours)</h5>
+                <div class="chart-container">
+                    <canvas id="forecastChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // --- CONFIGURATION ---
+    const API_BASE = 'http://127.0.0.1:8000'; // Address where main.py is running
+
+    let histChartInstance = null;
+    let foreChartInstance = null;
+
+    // 1. Fetch Stations on Load
+    async function populateStations() {
+        try {
+            const response = await fetch(`${API_BASE}/api/stations`);
+            const data = await response.json();
+            const select = document.getElementById('stationSelect');
+            
+            select.innerHTML = ''; // Clear loading text
+            
+            data.stations.forEach(station => {
+                const option = document.createElement('option');
+                option.value = station;
+                option.text = station;
+                if (station === 'Anand Vihar') option.selected = true; // Default
+                select.appendChild(option);
+            });
+
+            // Initial Load
+            updateDashboard();
+
+        } catch (error) {
+            console.error("Failed to load stations:", error);
+            document.getElementById('stationSelect').innerHTML = '<option>Error loading stations</option>';
+        }
+    }
+
+    // 2. Main Update Function
+    async function updateDashboard() {
+        const station = document.getElementById('stationSelect').value;
+        const days = document.getElementById('rangeSelect').value;
+        
+        if (!station) return;
+
+        // UI Updates
+        document.getElementById('ai-loading').style.display = 'block';
+        document.getElementById('ai-content').innerHTML = '';
+
+        try {
+            // A. Fetch Historical
+            const histRes = await fetch(`${API_BASE}/api/historical-data`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ station: station, days: days })
+            });
+            const histData = await histRes.json();
+            renderHistoricalChart(histData.data);
+
+            // B. Fetch Forecast
+            const foreRes = await fetch(`${API_BASE}/api/forecast-data`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ station: station })
+            });
+            const foreData = await foreRes.json();
+            renderForecastChart(foreData.data);
+
+            // C. Fetch AI Analysis
+            const recentSummary = histData.data.slice(-15).map(d => `${d.date}: Min ${d.min}, Max ${d.max}`).join("; ");
+            
+            const aiRes = await fetch(`${API_BASE}/api/analyze-policy`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ station: station, historical_summary: recentSummary })
+            });
+            const aiResult = await aiRes.json();
+            
+            document.getElementById('ai-loading').style.display = 'none';
+            document.getElementById('ai-content').innerHTML = aiResult.analysis || aiResult.error;
+
+        } catch (err) {
+            console.error(err);
+            alert("Error connecting to backend. Is main.py running?");
+            document.getElementById('ai-loading').style.display = 'none';
+        }
+    }
+
+    // 3. Chart Rendering Functions
+    function renderHistoricalChart(data) {
+        const ctx = document.getElementById('historicalChart').getContext('2d');
+        if (histChartInstance) histChartInstance.destroy();
+
+        histChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.map(d => d.date),
+                datasets: [
+                    {
+                        label: 'Max AQI (Night)',
+                        data: data.map(d => d.max),
+                        borderColor: '#dc3545',
+                        backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                        fill: true,
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Min AQI (Afternoon)',
+                        data: data.map(d => d.min),
+                        borderColor: '#0d6efd',
+                        backgroundColor: 'rgba(13, 110, 253, 0.1)',
+                        fill: true,
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: { y: { beginAtZero: true, title: {display:true, text: 'PM2.5 (AQI)'} } }
+            }
+        });
+    }
+
+    function renderForecastChart(data) {
+        const ctx = document.getElementById('forecastChart').getContext('2d');
+        if (foreChartInstance) foreChartInstance.destroy();
+
+        const labels = data.map(d => {
+            const date = new Date(d.time);
+            return `${date.getDate()}/${date.getMonth()+1} ${date.getHours()}:00`;
+        });
+
+        foreChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Predicted AQI (Next 100 Hours)',
+                    data: data.map(d => d.aqi),
+                    borderColor: '#198754',
+                    borderWidth: 2,
+                    pointRadius: 1,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+    }
+
+    // Initialize
+    window.onload = populateStations;
+</script>
+
+</body>
+</html>
